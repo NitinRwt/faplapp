@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  web:
+    build: .
+    command: uvicorn app:app --host=0.0.0.0 --port=8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - MODEL_PATH=Models/model_1_0_2.pt
+    restart: always

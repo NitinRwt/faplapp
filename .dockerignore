@@ -1,0 +1,22 @@
+# Exclude Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+# Ignore logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore IDE and editor settings
+.vscode/
+.idea/
+*.iml
+
+
