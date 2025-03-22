@@ -27,6 +27,12 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🐳 Running with Docker
 
+### Pull the Docker image
+```bash
+docker pull sensei13k/faplapp
+```
+## OR
+
 ### Build the Docker image
 ```bash
 docker build -t my-fastapi-app .
