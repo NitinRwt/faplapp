@@ -2,13 +2,14 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-def detect_and_crop(image_path, model_obb):
-    results = model_obb(image_path, conf=0.2)
+def detect_and_crop(image, model_obb):
+    # Run detection on the image array
+    results = model_obb(image, conf=0.2)
     obb_data = results[0].obb
     if obb_data is None:
         return None, "No objects detected"
     
-    image = cv2.imread(image_path)
+    # Crop the first detected meter region
     for i, class_id in enumerate(obb_data.cls.cpu().numpy()):
         corners_flat = obb_data.xyxyxyxy.cpu().numpy()[i]
         corners = np.array(corners_flat).reshape(4, 2)
@@ -67,19 +68,3 @@ def get_meter_reading(cropped_image, model):
             interpolated_value = round(left_value + (ratio * (right_value - left_value)), 1)
     
     return interpolated_value
-
-def main(image_path):
-    model_3 = YOLO("Models/analog_box.pt")
-    model_4 = YOLO("Models/best.pt")
-    
-    cropped_image, error = detect_and_crop(image_path, model_3)
-    if error:
-        print(error)
-        return
-    
-    meter_reading = get_meter_reading(cropped_image, model_4)
-    print(f"Meter Reading: {meter_reading} kV")
-
-if __name__ == "__main__":
-    image_path = "testimg/images/614.jpg"
-    main(image_path)
