@@ -47,13 +47,10 @@ def main(model_path_3, image_path):
     # Run inference using model_3 for detection
     results = model_3(image)
     
-    all_extracted_texts = []
-    
     # Iterate over the results and draw OBB predictions
     for r in results:
         if r.obb is not None:
             image, extracted_texts = draw_obb(image, r.obb)
-            all_extracted_texts.extend(extracted_texts)
             for i, class_id in enumerate(r.obb.cls.cpu().numpy()):
                 class_name = r.names[int(class_id)]
                 print(f"Detected class ID: {class_id}, Class name: {class_name}")
@@ -61,6 +58,13 @@ def main(model_path_3, image_path):
             # Print extracted texts from OCR
             for idx, text in enumerate(extracted_texts):
                 print(f"OCR Extracted Text {idx + 1}: {text}")
-    
-    return image, all_extracted_texts
 
+    # Display the resulting image with bounding boxes and text
+    cv2.imshow("Detections with OCR", image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    model_path_3 = "Models/new apparatus.pt"
+    image_path = "test_images/1 (1).jpg"
+    main(model_path_3, image_path)

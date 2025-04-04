@@ -101,8 +101,3 @@ def main(model_path_3, model_path_4, image_path):
     for class_name, values in class_results.items():
         print(f"  {class_name}: {''.join(values)}")
 
-if __name__ == "__main__":
-    model_path_3 = "Models/res_temp_box.pt" 
-    model_path_4 = "Models/res_temp_ocr.pt" 
-    image_path = "res_temp/RT2.jpeg"  
-    main(model_path_3, model_path_4, image_path)
