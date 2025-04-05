@@ -29,7 +29,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 
 ### Pull the Docker image
 ```bash
-docker pull sensei13k/faplapp
+docker pull sensei13k/faplapp:v2.1
 ```
 ## OR
 
