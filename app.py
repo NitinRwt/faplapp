@@ -6,7 +6,7 @@ from ultralytics import YOLO
 from PIL import Image
 import io
 import easyocr
-from ocr import detect_and_crop as ocr_detect_and_crop, detect_final_classes
+from ocr import crop_regions, detect_and_process
 from Remaining_test import draw_obb  
 from analog import crop_region, calculate_meter_reading, get_center_point
 
@@ -14,7 +14,7 @@ app = FastAPI()
 
 try:
     res_temp_box = YOLO("Models/res_temp_box.pt")
-    res_temp_ocr = YOLO("Models/res_temp_ocr.pt")
+    res_temp_ocr = YOLO("Models/temp_ocr.pt")
     analog_box = YOLO("Models/analog_box_v2.pt")
     analog_reading = YOLO("Models/analog_reading_v2.pt")
     remaining_test_model = YOLO("Models/Remaining_tests_model.pt")
@@ -31,35 +31,67 @@ def process_res_temp(file_bytes):
         # Try to process using both models and select the best result
         image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
         
-        # For OCR model processing (original res_temp approach)
-        cropped_regions = ocr_detect_and_crop(res_temp_box, image)
-        final_classes_dict = detect_final_classes(res_temp_ocr, cropped_regions)
+        # For OCR model processing (using new ocr.py logic)
+        ocr_results = detect_and_process(res_temp_box, res_temp_ocr, reader, image)
+        
+        # Convert ocr_results to dictionary format
+        final_classes_dict = {}
+        for class_name, value in ocr_results:
+            final_classes_dict[class_name] = value
         
         # Convert image for apparatus model
         image_cv = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
         
+        # Rest of your existing code remains the same
         # Process with new apparatus model
         apparatus_results = new_apparatus_model(image_cv)
         apparatus_data = {}
+        confidence_scores = {}
         
         # Extract text using apparatus model
         for r in apparatus_results:
             if r.obb is not None:
+                # Get confidence scores for detections
+                confidences = r.obb.conf.cpu().numpy() if hasattr(r.obb, 'conf') else None
+                
                 _, extracted_texts = draw_obb(image_cv.copy(), r.obb)
                 for i, class_id in enumerate(r.obb.cls.cpu().numpy()):
                     class_name = r.names[int(class_id)]
                     if i < len(extracted_texts) and extracted_texts[i]:
                         apparatus_data[class_name] = extracted_texts[i]
+                        
+                        # Store confidence score if available
+                        if confidences is not None and i < len(confidences):
+                            confidence_scores[class_name] = float(confidences[i])
+                        else:
+                            confidence_scores[class_name] = 0.75  # Default fallback
         
         # Combine results from both models
         final_data = {**final_classes_dict, **apparatus_data}
         
-        # Convert to key-value list format
-        kv_list = [{"keyName": k, "keyValue": "".join(v) if isinstance(v, list) else v, 
-                    "actualValue": "".join(v) if isinstance(v, list) else v, 
-                    "confidenceScore": 0.85} for k, v in final_data.items()]
+        # Calculate overall confidence (average of available scores)
+        overall_confidence = 0.0
+        if confidence_scores:
+            overall_confidence = sum(confidence_scores.values()) / len(confidence_scores)
+        else:
+            overall_confidence = 0.75  # Default if no scores available
+            
+        # Round overall confidence to 2 decimal places
+        overall_confidence = round(overall_confidence, 2)
         
-        return {"ocs": 0.85, "extractions": kv_list}
+        # Convert to key-value list format with individual confidence scores
+        kv_list = []
+        for k, v in final_data.items():
+            # Use the confidence score if available, otherwise use default
+            conf = round(confidence_scores.get(k, 0.75), 2)
+            kv_list.append({
+                "keyName": k, 
+                "keyValue": "".join(v) if isinstance(v, list) else v, 
+                "actualValue": "".join(v) if isinstance(v, list) else v, 
+                "confidenceScore": conf
+            })
+        
+        return {"ocs": overall_confidence, "extractions": kv_list}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error processing data: {str(e)}")
 
@@ -73,11 +105,14 @@ def process_remaining_test(file_bytes, expected_classes):
         results = remaining_test_model(image_cv)
         
         extracted_data = {}
-        confidence_score = 0.85
+        confidence_scores = {}
         
         # Process results and extract text from detected regions
         for r in results:
             if r.obb is not None:
+                # Get confidence scores from the detections
+                confidences = r.obb.conf.cpu().numpy() if hasattr(r.obb, 'conf') else None
+                
                 # Use the draw_obb function from Remaining_test.py to extract text
                 _, extracted_texts = draw_obb(image_cv.copy(), r.obb)
                 
@@ -89,33 +124,60 @@ def process_remaining_test(file_bytes, expected_classes):
                     if class_name in expected_classes and i < len(extracted_texts) and extracted_texts[i]:
                         # Store the detected text with its class name
                         extracted_data[class_name] = extracted_texts[i]
+                        
+                        # Store confidence score if available
+                        if confidences is not None and i < len(confidences):
+                            confidence_scores[class_name] = float(confidences[i])
+                        else:
+                            confidence_scores[class_name] = 0.75  # Default fallback
         
-        # Format response
-        kv_list = [{"keyName": k, "keyValue": v, "actualValue": v, "confidenceScore": confidence_score} 
-                  for k, v in extracted_data.items()]
+        # Calculate overall confidence score (average of individual scores)
+        overall_confidence = 0.0
+        if confidence_scores:
+            overall_confidence = sum(confidence_scores.values()) / len(confidence_scores)
+        else:
+            overall_confidence = 0.75  # Default if no scores available
+            
+        # Round overall confidence to 2 decimal places
+        overall_confidence = round(overall_confidence, 2)
+        
+        # Format response with individual rounded confidence scores
+        kv_list = []
+        for k, v in extracted_data.items():
+            conf = round(confidence_scores.get(k, 0.75), 2)
+            kv_list.append({
+                "keyName": k, 
+                "keyValue": v, 
+                "actualValue": v, 
+                "confidenceScore": conf
+            })
         
         # Determine test type based on expected classes
-        test_type = "extractions" if "UVolt" in expected_classes else "extractions"
+        test_type = "extractions"
         
         # If no data was extracted
         if not kv_list:
             raise HTTPException(status_code=400, detail=f"No data extracted for the expected classes: {expected_classes}")
             
-        return {"ocs": confidence_score, test_type: kv_list}
+        return {"ocs": overall_confidence, test_type: kv_list}
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error processing test data: {str(e)}")
 
-def process_analog_meter(file_bytes):
+def process_dc_test(file_bytes):
+    """
+    Implements the DC_TEST pipeline using functions from analog.py.
+    It decodes the image, ensures consistent color format, detects and crops the meter
+    region using the analog_box model, and then uses the analog_reading model along with
+    calculate_meter_reading and get_center_point to compute the meter reading.
+    """
     try:
-        # Convert bytes to OpenCV image
+        # Decode file bytes into a CV image (BGR)
         image_cv = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
         if image_cv is None:
-            raise HTTPException(status_code=400, detail="Invalid image data for analog meter processing")
+            raise HTTPException(status_code=400, detail="Invalid image data for DC_TEST")
         
-        # Detect the meter using analog_box model
         results = analog_box(image_cv)
-        
         cropped_meter = None
         for r in results:
             if hasattr(r, "obb") and r.obb is not None:
@@ -126,49 +188,55 @@ def process_analog_meter(file_bytes):
         if cropped_meter is None:
             raise HTTPException(status_code=400, detail="No analog meter detected in image")
         
-        # Process the cropped meter image to read the value
         meter_results = analog_reading(cropped_meter)
-        
+        needle_corners = None
         needle_corners = None
         number_positions = []
+        needle_confidence = 0
+        number_confidences = []
         
-        # Process detection results
         for r in meter_results:
             if hasattr(r, "obb") and r.obb is not None:
                 boxes = r.obb.xyxyxyxy.cpu().numpy()
                 classes = r.obb.cls.cpu().numpy()
+                confidences = r.obb.conf.cpu().numpy()  # Get confidence scores
                 
-                for box, class_id in zip(boxes, classes):
+                for box, class_id, conf in zip(boxes, classes, confidences):
                     class_name = r.names[int(class_id)]
                     center = get_center_point(box)
                     
                     if class_name.lower() == "needle":
                         needle_corners = box.reshape(4, 2)
-                    elif class_name.isdigit() or class_name in ["0", "5", "10", "15", "20", "25", "30"] or class_name.lower() == "numbers":
+                        needle_confidence = float(conf)
+                    elif (class_name.isdigit() or 
+                          class_name in ["0", "5", "10", "15", "20", "25", "30"] or 
+                          class_name.lower() == "numbers"):
                         number_positions.append((0, center))
+                        number_confidences.append(float(conf))
         
-        # Calculate meter reading if needle and numbers are detected
         if needle_corners is not None and number_positions:
             reading, method = calculate_meter_reading(needle_corners, number_positions)
-            if reading is not None:
-                # Format response to match API structure
-                kv_list = [
-                    {"keyName": "MeterReading", "keyValue": str(reading), 
-                     "actualValue": str(reading), "confidenceScore": 0.85}
-                ]
-                return {"ocs": 0.85, "extractions": kv_list}
-            else:
-                raise HTTPException(status_code=400, detail="Needle position is out of range")
-        else:
-            missing = []
-            if needle_corners is None:
-                missing.append("needle")
-            if not number_positions:
-                missing.append("numbers")
-            raise HTTPException(status_code=400, detail=f"Could not detect {' and '.join(missing)} in analog meter")
             
+            overall_confidence = (2 * needle_confidence + sum(number_confidences)) / (2 + len(number_confidences))
+            overall_confidence = round(overall_confidence, 2)
+            
+            reading = round(float(reading), 2)
+            
+            list = [{
+                "keyName": "MeterReading",
+                "keyValue": str(reading),
+                "actualValue": str(reading),
+                "confidenceScore": overall_confidence,
+            }]
+            
+            return {
+                "ocs": overall_confidence,
+                "extractions": list
+            }
+    
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing analog meter: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Error processing DC_TEST: {str(e)}")
+
 
 @app.post("/detect/")
 async def detect(file: UploadFile = File(...), test_type: str = Form(...)):
@@ -176,7 +244,7 @@ async def detect(file: UploadFile = File(...), test_type: str = Form(...)):
     if test_type == "CONDUCTOR_RESISTANCE_TEST":
         return process_res_temp(file_bytes)
     elif test_type == "DC_TEST":
-        return process_analog_meter(file_bytes)
+        return process_dc_test(file_bytes)
     elif test_type == "PARTIAL_DISCHARGE_TEST":
         return process_remaining_test(file_bytes, expected_classes=["UVolt", "qCValue"])
     elif test_type == "HIGH_VOLTAGE_TEST":
