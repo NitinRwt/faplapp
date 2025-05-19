@@ -254,4 +254,4 @@ async def detect(file: UploadFile = File(...), test_type: str = Form(...)):
 
 @app.get("/")
 def health_check():
-    return {"status": "healthy", "version": "v2.1"}
+    return {"status": "healthy", "version": "v2.5"}
