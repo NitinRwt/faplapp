@@ -143,8 +143,8 @@ class TwoStageOCR:
 # -------------------
 
 if __name__ == '__main__':
-    box_model = 'Models/res_temp_box_v2.pt'
-    temp_yolo_model = 'Models/temp_detection2.pt'
+    box_model = 'Models/res_temp_box_v3.pt'
+    temp_yolo_model = 'Models/temp_detect_v3.pt'
     temp_cnn_model  = 'Models/lenet7seg.h5'
     res_yolo_model = 'Models/res_detect_v4.pt'
     res_cnn_model  = 'Models/lenet_res_v4.h5'

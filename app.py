@@ -7,15 +7,15 @@ from PIL import Image
 import tempfile
 import tensorflow as tf
 import easyocr
-from Remaining_test import draw_obb  
-from analog import crop_region, calculate_meter_reading, get_center_point
+from HV_PD import draw_obb_with_classes 
+from analog_test import crop_region, calculate_needle_corner_ratio_approximation, get_center_point
 
 app = FastAPI()
 
 try:
-    analog_box = YOLO("Models/analog_box_v2.pt")
-    analog_reading = YOLO("Models/analog_reading_v2.pt")
-    remaining_test_model = YOLO("Models/Remaining_tests_model.pt")
+    analog_box = YOLO("Models/analog_box_v3.pt")
+    analog_reading = YOLO("Models/analog_reading_v3.pt")
+    remaining_test_model = YOLO("Models/HV_PD_model2.pt")
 
 except Exception as e:
     print(f"Error loading models: {str(e)}")
@@ -26,10 +26,9 @@ reader = easyocr.Reader(['en'])
 from res_temp_N2N import order_points 
 from Lenet_res import YoloLeNetOCR     
 
-# Initialize models once (reuse for all requests)
 res_temp_box_model = 'Models/res_temp_box_v3.pt'
-temp_yolo_model = 'Models/temp_detection2.pt'
-temp_cnn_model  = 'Models/lenet7seg.h5'
+temp_yolo_model = 'Models/temp_detect_v4.pt'
+temp_cnn_model  = 'Models/Lenet_temp_v4.h5'
 res_yolo_model = 'Models/res_detect_v4.pt'
 res_cnn_model  = 'Models/lenet_res_v4.h5'
 
@@ -199,33 +198,35 @@ def process_remaining_test(file_bytes, expected_classes):
             if r.obb is not None:
                 # Get confidence scores from the detections
                 confidences = r.obb.conf.cpu().numpy() if hasattr(r.obb, 'conf') else None
-                
-                # Use the draw_obb function from Remaining_test.py to extract text
-                _, extracted_texts = draw_obb(image_cv.copy(), r.obb)
-                
+
+                # Use the class-aware draw_obb function
+                _, extracted_texts = draw_obb_with_classes(image_cv.copy(), r.obb, r.names)
+
                 # Match the extracted texts with their class names
                 for i, class_id in enumerate(r.obb.cls.cpu().numpy()):
                     class_name = r.names[int(class_id)]
                     
                     # Only process classes that we expect for this test type
                     if class_name in expected_classes and i < len(extracted_texts) and extracted_texts[i]:
-                        # Store the detected text with its class name
-                        extracted_data[class_name] = extracted_texts[i]
+                        # Use the extracted text directly (already processed by draw_obb_with_classes)
+                        processed_text = extracted_texts[i]
                         
-                        # Store confidence score if available
-                        if confidences is not None and i < len(confidences):
-                            confidence_scores[class_name] = float(confidences[i])
-                        else:
-                            confidence_scores[class_name] = 0.75  
+                        if processed_text:
+                            # Store the processed text with its class name
+                            extracted_data[class_name] = processed_text
+                            
+                            # Store confidence score if available
+                            if confidences is not None and i < len(confidences):
+                                confidence_scores[class_name] = float(confidences[i])
+                            else:
+                                confidence_scores[class_name] = 0.75  
         
         # Calculate overall confidence score (average of individual scores)
         overall_confidence = 0.0
         if confidence_scores:
             overall_confidence = sum(confidence_scores.values()) / len(confidence_scores)
         else:
-            overall_confidence = 0.75  # Default if no scores available
-            
-        # Round overall confidence to 2 decimal places
+            overall_confidence = 0.75  
         overall_confidence = round(overall_confidence, 2)
         
         # Format response with individual rounded confidence scores
@@ -253,10 +254,10 @@ def process_remaining_test(file_bytes, expected_classes):
 
 def process_dc_test(file_bytes):
     """
-    Implements the DC_TEST pipeline using functions from analog.py.
+    Implements the DC_TEST pipeline using functions from analog_test.py.
     It decodes the image, ensures consistent color format, detects and crops the meter
     region using the analog_box model, and then uses the analog_reading model along with
-    calculate_meter_reading and get_center_point to compute the meter reading.
+    functions from analog_test.py to compute the meter reading.
     """
     try:
         # Decode file bytes into a CV image (BGR)
@@ -268,6 +269,7 @@ def process_dc_test(file_bytes):
         cropped_meter = None
         for r in results:
             if hasattr(r, "obb") and r.obb is not None:
+                from analog_test import crop_region
                 cropped_meter = crop_region(image_cv, r.obb)
                 if cropped_meter is not None:
                     break
@@ -276,7 +278,6 @@ def process_dc_test(file_bytes):
             raise HTTPException(status_code=400, detail="No analog meter detected in image")
         
         meter_results = analog_reading(cropped_meter)
-        needle_corners = None
         needle_corners = None
         number_positions = []
         needle_confidence = 0
@@ -290,6 +291,7 @@ def process_dc_test(file_bytes):
                 
                 for box, class_id, conf in zip(boxes, classes, confidences):
                     class_name = r.names[int(class_id)]
+                    from analog_test import get_center_point
                     center = get_center_point(box)
                     
                     if class_name.lower() == "needle":
@@ -302,7 +304,8 @@ def process_dc_test(file_bytes):
                         number_confidences.append(float(conf))
         
         if needle_corners is not None and number_positions:
-            reading, method = calculate_meter_reading(needle_corners, number_positions)
+            from analog_test import calculate_needle_corner_ratio_approximation
+            reading, method = calculate_needle_corner_ratio_approximation(needle_corners, number_positions)
             
             overall_confidence = (2 * needle_confidence + sum(number_confidences)) / (2 + len(number_confidences))
             overall_confidence = round(overall_confidence, 2)
@@ -320,10 +323,12 @@ def process_dc_test(file_bytes):
                 "ocs": overall_confidence,
                 "extractions": list
             }
+        else:
+            raise HTTPException(status_code=400, detail="Could not detect needle or number positions in meter")
     
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error processing DC_TEST: {str(e)}")
-
+    
 
 @app.post("/detect/")
 async def detect(file: UploadFile = File(...), test_type: str = Form(...)):
@@ -333,14 +338,14 @@ async def detect(file: UploadFile = File(...), test_type: str = Form(...)):
     elif test_type == "DC_TEST":
         return process_dc_test(file_bytes)
     elif test_type == "PARTIAL_DISCHARGE_TEST":
-        return process_remaining_test(file_bytes, expected_classes=["UVolt", "qCValue"])
+        return process_remaining_test(file_bytes, expected_classes=["q(IEC) value", "qCValue"])
     elif test_type == "HIGH_VOLTAGE_TEST":
-        return process_remaining_test(file_bytes, expected_classes=["kV", "TimeLeft", "q(IEC) value"])
+        return process_remaining_test(file_bytes, expected_classes=["kV", "TimeLeft", "UVolt"])
     else:
         raise HTTPException(status_code=400, detail="Invalid test_type. Choose 'CONDUCTOR_RESISTANCE_TEST', 'DC_TEST', 'PARTIAL_DISCHARGE_TEST', or 'HIGH_VOLTAGE_TEST'")
 
 @app.get("/")
 def health_check():
-    return {"status": "healthy", "version": "v3.8"}
+    return {"status": "healthy", "version": "v5.1"}
 
 
